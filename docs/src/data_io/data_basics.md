@@ -12,12 +12,12 @@ All data, both prescribed inputs *and* computed outputs,  are stored in 5 arrays
   - **`para`**`::AbstractArray{Float64, 3}`:  **aerodynamic** performance quantities. The second dimension captures the variation over a mission. The third dimension allows the specification of multiple mission profiles.
   - **`pare`**`::AbstractArray{Float64, 3}`:  **engine** perfomance quantities. As for `para`, the second and third dimensions capture flight-point and mission dependencies, respectively.
 
-Data in the `par` arrays are accessed via Integer indices defined at `src/misc/index.inc`. These indices can be added to a namespace via an `include` statement:
+Data in the `par` arrays are accessed via Integer indices defined at `src/data_structs/index.inc`. These indices can be added to a namespace via an `include` statement:
 
 ```julia
 using TASOPT
 #using __TASOPTroot__, which fetches the src directory
-include(joinpath(__TASOPTroot__, "misc/index.inc"))
+include(joinpath(__TASOPTroot__, "data_structs/index.inc"))
 
 #or more concisely
 include(__TASOPTindices__)
@@ -55,7 +55,7 @@ can be included via the convenience variable `__TASOPTindices__`
 
 ## `aircraft` struct
 
-An aircraft is composed of `par` array fields, title and description fields, and a `sized` flag to indicate its status. An optional `fuse_tank` field is present as a trial for future struct-based development. All fields are dot-accessible and array elements can be changed (e.g., `ac.parg[igS] = 20`), though the struct itself is not mutable.
+An aircraft is composed of `par` array fields, title and description fields, and a `is_sized` flag to indicate its status. An optional `fuse_tank` field is present as a trial for future struct-based development. All fields are dot-accessible and array elements can be changed (e.g., `ac.parg[igS] = 20`), though the struct itself is not mutable.
 
 Refer to the [struct reference page](@ref datastructs) for add'l details.
 

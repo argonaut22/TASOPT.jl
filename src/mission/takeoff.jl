@@ -14,6 +14,7 @@ function takeoff!(ac; printTO = true)
     wing  = ac.wing
     htail = ac.htail
     vtail = ac.vtail
+    imission = 1
 
     #---- Newton convergence tolerance
     toler = 1.0e-7
@@ -69,9 +70,9 @@ function takeoff!(ac; printTO = true)
     #cc      write(*,*) '^ 3a', Fmax, Fref
 
     #---- total CD during roll
-    icdfun = 0
+    computes_surfcd = false
     # iairf = 1
-    cdsum!(parg, view(para, :, ip), view(pare, :, ip),  wing, htail, vtail, icdfun)
+    cdsum!(ac, imission, ip, computes_surfcd)
     CDroll = para[iaCD, ip] + parg[igCDgear]
 
     #---- thrust constants for all engines operating
