@@ -5,7 +5,7 @@
             fduo, fdus, fdut)
 
 Calculates wing or tail surface profile `CD` by calculating the performance of wing segments explicitly via airfoil data (found in [`./src/air/C.air`] and accessed by [`airfun`], [`airtable`]).
-Called by [`cdsum!`](@ref) if `icdfun` flag set to 1.
+Called by [`cdsum!`](@ref) if `computes_surfcd` flag set to true.
 
 !!! details "🔃 Inputs and Outputs"
       **Inputs:**
@@ -45,8 +45,6 @@ function surfcd2(
       n::Int = 8     #  ~0.07% error
       #     n = 12    #  ~0.07% error
 
-      #     call tset(time0)
-
       cosL = cosd(wing.layout.sweep)
 
       AR = wing.layout.span^2 / wing.layout.S
@@ -74,11 +72,7 @@ function surfcd2(
       clpt = clp1 * γt / wing.outboard.λ / (1.0 + fdut)^2
 
       #c---- area of exposed wing
-      #      Swing = co*b * ( 0.5*(1.0    +λs)*(ηs-ηo)
-      #     &               + 0.5*(λs+λt)*(1.0 -ηs) )
-
-      #      write(*,*)
-      #      write(*,*) CL, CLhtail, S/(Kp*b*co)
+      #      Swing = co*b * ( 0.5*(1.0    +λs)*(ηs-ηo) + 0.5*(λs+λt)*(1.0 -ηs) )
 
       #---- fraction of exposed wing subject to wing-root shock unsweep
       CDfwing = 0.0
@@ -87,12 +81,14 @@ function surfcd2(
       Snorm = 0.0
       ARe = wing.airsection.Re
 
-      for i = 1:n/2
-            frac = (float(i) - 0.5) / float(n / 2)
+      #remember \ will give you a float which makes the iterator
+      # also work on floats, which can make some cases type unstable.
+      @inbounds for i = 1:n÷2 
+            frac = (i - 0.5) / (n / 2)
             η = ηo * (1.0 - frac) + ηs * frac
-            dη = (ηs - ηo) / float(n / 2)
-            P = 1.0 - frac + γs * frac
-            C = 1.0 - frac + wing.inboard.λ * frac
+            dη = (ηs - ηo) / (n / 2)
+            P = 1.0*(1.0 - frac) + γs * frac
+            C = 1.0*(1.0 - frac) + wing.inboard.λ * frac
             toc = wing.inboard.cross_section.thickness_to_chord * (1.0 - frac) + wing.outboard.cross_section.thickness_to_chord * frac
             fdu = fduo * (1.0 - frac) + fdus * frac
 
@@ -113,8 +109,6 @@ function surfcd2(
 
             cd = cdf + cdp
 
-            #        write(*,'(1x,8f12.6)') η, fSuns, clp, cdf+cdp*cosL^3, cd
-
             Snorm = Snorm + C * dη
             CDwing = CDwing + C * dη * cd
 
@@ -122,10 +116,10 @@ function surfcd2(
             CDpwing = CDpwing + C * dη * cdp
       end
 
-      for i = n/2+1:n
-            frac = (float(i - n / 2) - 0.5) / float(n / 2)
+      @inbounds for i = n/2+1:n
+            frac = (i - n / 2 - 0.5) / (n / 2)
             η = ηs * (1.0 - frac) + 1.0 * frac
-            dη = (1.0 - ηs) / float(n / 2)
+            dη = (1.0 - ηs) / (n / 2)
             P = γs * (1.0 - frac) + γt * frac
             C = wing.inboard.λ * (1.0 - frac) + wing.outboard.λ * frac
             toc = wing.outboard.cross_section.thickness_to_chord * (1.0 - frac) + wing.outboard.cross_section.thickness_to_chord * frac
@@ -146,8 +140,6 @@ function surfcd2(
 
             cd = cdf + cdp
 
-            #        write(*,'(1x,8f12.6)') η, fSuns, clp, cdf+cdp*cosL^3, cd
-
             Snorm = Snorm + C * dη
             CDwing = CDwing + C * dη * cd
 
@@ -165,8 +157,6 @@ function surfcd2(
       #      CDover = 2.0*Cdiss*(ηo/Kc)*0.5*dCp*(3.0 + 0.0625*dCp^2)
       CDover = 0.0
 
-      #     call tadd(time0,t_surfcd2)
-
       return clpo, clps, clpt, CDfwing, CDpwing, CDwing, CDover
 
 end # surfcd2
@@ -180,7 +170,7 @@ end # surfcd2
     aRexp, kSuns, fCDcen)
 
 Computes wing or tail surface profile CD from pre-computed chord quantities and corrections.
-Called by [`cdsum!`](@ref) if `icdfun` flag set to 0.
+Called by [`cdsum!`](@ref) if `computes_surfcd` flag set to true.
 
 !!! compat "Future Changes" 
       This function may be renamed for clarity of use.
@@ -261,29 +251,7 @@ function surfcd(S,
                 (1.0 + λs) * (ηs - ηo) * lsfac +
                 (λs + λt) * (1.0 - ηs) * lfac)
 
-      #      if(λt==0.25) 
-      #      write(*,*)
-      #      write(*,*) fCDcen, lsfac, lfac
-      #      write(*,*) ηo, ηs-ηo, 1.0-ηs
-      #      write(*,*) ηo, ηs-ηo, 1.0-ηs
-      #      write(*,*) 2.0 * ηo,
-      #     &          (1.0    +λs)*(ηs-ηo),
-      #     &          (λs+λt)*(1.0 -ηs), 
-      #     &          2.0 * ηo
-      #     &         +(1.0    +λs)*(ηs-ηo)
-      #     &         +(λs+λt)*(1.0 -ηs)
-      #        write(*,*) 2.0 * ηo * fCDcen,
-      #     &          (1.0    +λs)*(ηs-ηo)*lsfac,
-      #     &          (λs+λt)*(1.0 -ηs)*lfac,
-      #     &           2.0 * ηo * fCDcen
-      #     &         +(1.0    +λs)*(ηs-ηo)*lsfac
-      #     &         +(λs+λt)*(1.0 -ηs)*lfac
-      #      write(*,*) Sh/0.3048^2 , CDsurf
-      #      end
-
       CDover = 0.0
-
-      #     call tadd(time0,t_surfcd)
 
       return CDsurf, CDover
 end # surfcd
