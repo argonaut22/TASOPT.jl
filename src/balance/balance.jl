@@ -1,41 +1,34 @@
 """
-balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay, itrim)
+      balance(ac, imission, ip, rfuel, rpay, ξpay, opt_trim_var)
 
 Makes one of three (or none) changes to achieve pitch trim
 calculates resulting CG, CP, NP locations.
 
 Inputs:
-- `pari[.]`  integer flag array
-- `parg[.]`  geometry parameter array
-- `para[.]`  aero parameter array
-- `fuse`      TASOPT.Fuselage
-- `wing`      TASOPT.Wing
-- `htail`     TASOPT.Tail
-- `vtail`     TASOPT.Tail
-- `rfuel`    fuel fraction   Wfuel_actual/Wfuel_MTOW
+- `ac::aircraft`: structure with aircraft parameters
+- `imission::Int64`: mission index (1 is design mission)
+- `ip::Int64`: mission point index
+- `rfuel`    fuel fraction
 - `rpay`     payload fraction Wpay_actual/Wpay_MTOW
 - `ξpay`    partial-payload packing location
     * = 0.0   all the way in front  of cabin
     * = 0.5   all the way in middle of cabin
     * = 1.0   all the way in back   of cabin
-- `iengloc`  engine location index
-- `itrim`      = 0  no changes
-    * = 1  adjust CLh   (horizontal tail cl)
-    * = 2  adjust Sh    (horizontal tail area)
-    * = 3  adjust xwbox (wing box location)
+- `opt_trim_var`      = "none"  no changes
+    * = "CL_htail"      adjust CLh   (horizontal tail cl)
+    * = "S_htail"       adjust Sh    (horizontal tail area)
+    * = "x_wingbox"     adjust xwbox (wing box location)
 
 Outputs: 
-
+No direct outputs. Fields in `ac` are modified. Namely:
 - `para[iaxCG]`  center of gravity
-- `para[iaxCP]`  center of pressure ( = xCG if itrim=1,2,3 )
+- `para[iaxCP]`  center of pressure ( = xCG if opt_trim_var != "none" )
 - `para[iaxNP]`  neutral point location
 
-!!! compat "Future Changes"
-      In an upcoming revision, an `aircraft` struct and auxiliary indices will be passed in lieu of pre-sliced `par` arrays.
 """
-function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay, itrim)
-
-      iengloc = pari[iiengloc]
+function balance(ac, imission, ip, rfuel, rpay, ξpay, opt_trim_var)
+      #Unpack aircraft
+      parg, _, para, _, options, fuse, fuse_tank, wing, htail, vtail, _ = unpack_ac(ac, imission, ip = ip)
 
       # Unpack weights
       Wpay = parg[igWpay]
@@ -55,7 +48,7 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
       Wftank = parg[igWftank]
       xWftank = parg[igxWftank]
 
-      nftanks = pari[iinftanks] #number of fuel tanks in fuselage
+      nftanks = fuse_tank.tank_count #number of fuel tanks in fuselage
       lftank = parg[iglftank]
 
       # Use weight fractions to calcualte weights of subsystems
@@ -69,7 +62,7 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
 
       xwbox = wing.layout.box_x
 
-      rfuelF, rfuelB, rpayF, rpayB, xcgF, xcgB = cglpay(pari, parg, fuse, wing, htail, vtail)
+      rfuelF, rfuelB, rpayF, rpayB, xcgF, xcgB = cglpay(ac)
 
       #---- wing centroid offset from wingbox, assumed fixed in CG calculations
       dxwing = wing.layout.x - wing.layout.box_x
@@ -90,7 +83,6 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
       Sh1 = Sh
 
       #---- total weight, weight moment, and derivatives
-
       W = rpay * Wpay +
           rfuel * Wfuel +
           Wfuse +
@@ -122,11 +114,11 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
 
       W_Sh = Whtail / Sh1
 
-      #Calcualte fuel moment and derivaties wrt to wing box location 
-      if (pari[iifwing] == 0) #If fuel is stored in the fuselage
+      #Calculate fuel moment and derivatives wrt to wing box location 
+      if !(options.has_wing_fuel) #If no wing fuel, therefore fuel is stored in the fuselage
             xWfuel = rfuel * xWfuel
             xWfuel_xwbox = 0.0
-      else
+      else #if wing fuel
             xWfuel = rfuel * xWfuel
             xWfuel_xwbox = rfuel * Wfuel
       end
@@ -154,7 +146,7 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
       CMh1 = para[iaCMh1]
       CL = para[iaCL]
       CLh = para[iaCLh]
-      # println("before itrim $(para[iaCLh]), CL = $CL")
+      # println("before opt_trim_var $(para[iaCLh]), CL = $CL")
       CMVf1 = parg[igCMVf1]
       CLMf0 = parg[igCLMf0]
 
@@ -185,15 +177,15 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
 
       #---- drive to Res=0 (pitch trim) by one of three changes...
 
-      if (itrim == 1)
+      if compare_strings(opt_trim_var,"CL_htail")
             #----- ... adjust horizontal tail CLh
             delCLh = -Res / Res_CLh
             CLh = CLh + delCLh
-            #  println("inside itrim = 1: $delCLh, $CLh")
+            #  println("inside opt_trim_var = "CL_htail": $delCLh, $CLh")
             cCM = cCM + cCM_CLh * delCLh
             para[iaCLh] = CLh
 
-      elseif (itrim == 2)
+      elseif compare_strings(opt_trim_var, "S_htail")
             #----- ... adjust horizontal tail area
             delSh = -Res / Res_Sh
             Sh = Sh + delSh
@@ -202,7 +194,7 @@ function balance(pari, parg, para, fuse, wing, htail, vtail, rfuel, rpay, ξpay,
 
             htail.layout.S = Sh
 
-      elseif (itrim == 3)
+      elseif compare_strings(opt_trim_var, "x_wingbox")
             #----- ... adjust wing box location
             delxwbox = -Res / Res_xwbox
             xwbox = xwbox + delxwbox
@@ -264,6 +256,8 @@ end # balance
 
 
 """
+      size_htail(ac, paraF, paraB, paraC)
+
 Sets horizontal tail area and wing position to simultaneously:
 
 1) Meet pitch trim requirement with forward CG
@@ -273,20 +267,18 @@ Calculates resulting CG, CP, NP locations
 
 Inputs:  
       
-- `pari[.]`  integer fla array
+- `ac`       aircraft object
 - `parg[.]`  geometry parameter array
 - `paraF[.]` aero parameter array for fwdCG case
 - `paraB[.]` aero parameter array for aft CG case
 - `paraC[.]` aero parameter array for cruise tail CL case
 
 Outputs: 
-  
-- `parg[igSh]`    HT area
-- `parg[igxwbox]` wingbox location
-- `parg[igxwing]` wing centroid location
-
+No direct outputs. Fields in `ac` are modified.
 """
-function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
+function size_htail(ac, paraF, paraB, paraC)
+      #TODO find a way to remove the para inputs and use ac instead
+      parg, _, fuse, fuse_tank, wing, htail, vtail, _ = unpack_ac_components(ac)
 
       itmax = 10
       toler = 1.0e-7
@@ -298,7 +290,7 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
       cosL = cosd(sweep)
 
       #---- set CG limits with worst-case payload arrangements
-      rfuelF, rfuelB, rpayF, rpayB, xcgF, xcgB = cglpay(pari, parg,fuse, wing, htail, vtail)
+      rfuelF, rfuelB, rpayF, rpayB, xcgF, xcgB = cglpay(ac)
 
       rpayC = 1.0
 
@@ -314,10 +306,6 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
       SM = htail.SM_min
       cma = wing.mean_aero_chord
 
-      # Unpack flags
-      iengloc = pari[iiengloc]  # Engine location 
-      iHTsize = htail.size
-      ixwmove = htail.move_wingbox
       # Unpack Weights
       Wpay = parg[igWpay]
       Wfuel = parg[igWfuel]
@@ -339,7 +327,7 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
       Wtesys = parg[igWtesys]
       xWtesys = parg[igxWtesys]
 
-      nftanks = pari[iinftanks]
+      nftanks = fuse_tank.tank_count
       lftank = parg[iglftank]
       Wftank = parg[igWftank]
       xWftank = parg[igxWftank]
@@ -468,7 +456,7 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
             WC_Sh = We_Sh
 
             #---- total weight moment at forward and aft CG limits
-            if pari[iifwing] == 0
+            if !(ac.options.has_wing_fuel)
                   xWfuel_xw = 0.0
             else
                   xWfuel_xw = Wfuel
@@ -485,12 +473,12 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
             xWB_Sh = xWe_Sh
             xWC_Sh = xWe_Sh
 
-            if (iHTsize == 1)
+            if compare_strings(htail.opt_sizing, "fixed_Vh")
                   #----- fix HT volume (Section 2.12.1 of TASOPT docs)
                   lhtail = htail.layout.x - (xwbox + dxwing)
                   lhtail_xw = -1.0
 
-                  Vh = htail.volume      # Tail volume is specified here!
+                  Vh = htail.volume     # Tail volume is specified here!
                   Sh = Vh * S * cma / lhtail # Corresponding tail surf area
 
                   r[1] = Sh * lhtail - Vh * S * cma  # This is 0 (residual is 0 ∵ Vh = Sh*lh/(S*cma))
@@ -529,13 +517,13 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
             end
 
 
-            if (ixwmove == 0)
+            if compare_strings(htail.opt_move_wing, "fixed")
                   #----- fix wing location
                   r[2] = 0.0
                   a[2, 1] = 0.0
                   a[2, 2] = 1.0
 
-            elseif (ixwmove == 1)
+            elseif compare_strings(htail.opt_move_wing, "fixed_CLh")
                   #----- set wing location to get CLh=CLhspec in cruise
                   CMw0 = paraC[iaCMw0]
                   CMw1 = paraC[iaCMw1]
@@ -558,7 +546,7 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
                   a[2, 1] = cCM_Sh / CL + xWC_Sh / WC - (xWC / WC^2) * WC_Sh
                   a[2, 2] = cCM_xw / CL + xWC_xw / WC
 
-            elseif (ixwmove == 2)
+            elseif compare_strings(htail.opt_move_wing, "min_static_margin")
                   #----- set wing location by stability margin at aft-CG case
                   CMw1 = paraB[iaCMw1]
                   CMh1 = paraB[iaCMh1]
@@ -611,7 +599,9 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
             end
 
       end #end for loop iter
-      dmax > toler && println("HTSIZE: Pitch not converged. dxwbox,dSh = $dxw, $dSh")
+      if (dmax > toler)
+            @warn "`size_htail()`: Pitch not converged. dxwbox,dSh = $dxw, $dSh"
+      end
 
 
       #---- set converged results
@@ -624,7 +614,7 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
       dxeng2wbox = parg[igdxeng2wbox]
       parg[igxeng] = xwbox - dxeng2wbox
 
-      if (iHTsize == 1)
+      if compare_strings(ac.htail.opt_sizing, "fixed_Vh")
             #----- for fixed HT area, find minimum required CLh for foward-CG trim
             CMw0 = paraF[iaCMw0]
             CMw1 = paraF[iaCMw1]
@@ -649,7 +639,7 @@ function htsize(pari, parg, paraF, paraB, paraC,fuse,wing, htail, vtail)
 
 
       return
-end # htsize
+end # size_htail
 
 
 """
@@ -665,7 +655,8 @@ which gives an explicit solution for `rpayF`,`rpayB`.
 The alternative 2D search for `rfuel`,`rpay` is kinda ugly, 
 and unwarranted in practice.
 """
-function cglpay(pari, parg, fuse, wing, htail, vtail)
+function cglpay(ac)
+      parg, options, fuse, fuse_tank, wing, htail, vtail, _ = unpack_ac_components(ac)
 
       Wpay = parg[igWpay]
       Wfuel = parg[igWfuel]
@@ -683,7 +674,7 @@ function cglpay(pari, parg, fuse, wing, htail, vtail)
       Wtesys = parg[igWtesys]
       #      xWtesys = parg[igxWtesys]
 
-      nftanks = pari[iinftanks]
+      nftanks = fuse_tank.tank_count
       lftank = parg[iglftank]
       Wftank = parg[igWftank]
       #      xWftank = parg[igxWftank]
@@ -750,7 +741,7 @@ function cglpay(pari, parg, fuse, wing, htail, vtail)
       sgn = [-1.0, 1.0]
 
       xftank = parg[igxWftank] / Wftank
-      if pari[iifwing] == 1 #Fuel is in wings
+      if (options.has_wing_fuel) #Fuel is in wings
             rf = [0.0, 0.0]
       elseif xftank < xcabin
             rf = [1.0, 0.0]

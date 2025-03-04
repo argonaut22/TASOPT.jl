@@ -1,5 +1,5 @@
 """
-    fly_off_design!(ac, mi, itermax, initeng, saveOffDesign)
+    fly_off_design!(ac, mi, itermax, initializes_engine, saveOffDesign)
 
 `fly_off_design!` runs the aircraft through input off-design missions
 
@@ -8,27 +8,20 @@
 - `ac::aircraft`: Aircraft with first mission being the design mission
 - `mi::Int64`: Off design mission to run (Default: 1)
 - `itermax::Int64`: Maximum iterations for sizing loop
-- `initeng::Boolean`: Use design case as initial guess for engine state if true
+- `initializes_engine::Boolean`: Use design case as initial guess for engine state if true
 
 **Outputs:**
 - No explicit outputs. Computed quantities are saved to `par` arrays of `aircraft` model for the off design mission selected
 
 """
-function fly_off_design!(ac, mi = 1; itermax = 35, initeng = true)
-
-    pari = ac.pari
-    parg = ac.parg
-    parm = view(ac.parm, :, mi:mi)
-    para = view(ac.para, :, :, mi:mi)
-    pare = view(ac.pare, :, :, mi:mi)
+function fly_off_design!(ac, mi = 1; itermax = 35, initializes_engine = true)
+    #Extract aircraft components and storage arrays
+    parg, parm, para, pare, options, fuse, fuse_tank, wing, htail, vtail, engine = unpack_ac(ac, mi)
+    
     parad = ac.parad
     pared = ac.pared
 
     resetHXs(pare) #Reset heat exchanger parameters
-
-    fuse = ac.fuselage
-    wing = ac.wing
-    htail = ac.htail
 
     time_propsys = 0.0
 
@@ -37,6 +30,7 @@ function fly_off_design!(ac, mi = 1; itermax = 35, initeng = true)
 
     fuse_tank = ac.fuse_tank #Unpack struct with tank parameters
     fuse = ac.fuselage 
+    
 
 #------ mission-varying excrescence factors disabled in this version
 #-      ( also commented out in getparm.f )
@@ -142,13 +136,11 @@ function fly_off_design!(ac, mi = 1; itermax = 35, initeng = true)
       para[iaReunit,ip] = Re
     end
 
-    if initeng == 1
+    if (initializes_engine)
 #----- use design case as initial guess for engine state
-          for ip = 1: iptotal
-                for ie = 1: ietotal
-                      pare[ie,ip] = pared[ie,ip]
-                end
-          end
+        pare[:,:] .= pared[:,:]
+    else
+        pare[ieu0, ipcruise1] = pared[ieu0, ipcruise1] #Copy flight speed for altitude calculation
     end
   
     for ip = ipstatic: ipdescentn
@@ -243,20 +235,35 @@ function fly_off_design!(ac, mi = 1; itermax = 35, initeng = true)
           rlx = 0.5
     end
 
-    set_ambient_conditions!(ac, ipcruise1)
+    #Calculate start-of-cruise altitude from desired lift coefficient
+    # Use cabin volume to get buoyancy weight
+    ρcab = max(parg[igpcabin], pare[iep0, ipcruise1]) / (RSL * TSL)
+    WbuoyCR = (ρcab - pare[ierho0, ipcruise1]) * gee * parg[igcabVol]
 
-    if (pari[iifwing] == 0) #If fuel is stored in the fuselage
+    ip = ipcruise1
+    We = WMTO * para[iafracW, ip]
+    CL = para[iaCL, ip]
+    u0 = pare[ieu0, ip]
+    BW = We + WbuoyCR # Weight including buoyancy
+    S = wing.layout.S
+
+    ρ0 = BW / (0.5*u0^2*S*CL) #Find density from L=W
+    para[iaalt, ip] = find_altitude_from_density(ρ0, ΔTatmos) * 1e3 #Store altitude
+
+    set_ambient_conditions!(ac, ipcruise1, im = mi)
+
+    if !(options.has_wing_fuel) #If fuel is stored in the fuselage
         #Analyze pressure evolution in tank and store the vented mass flow rate
         _, _, _, _, _, _, _, Mvents, _, _ = CryoTank.analyze_TASOPT_tank(ac, fuse_tank.t_hold_orig, fuse_tank.t_hold_dest, mi)
         parm[imWfvent] = Mvents[end] * gee #Store vented weight
     end
 
     # Calling mission
-    time_propsys += mission!(pari, parg, parm, para, pare, fuse, wing, htail, ac.vtail, false, calculate_cruise = true) #Calculate start of cruise too
+    time_propsys += mission!(ac, mi, false, calculate_cruise = true) #Calculate start of cruise too
     # println(parm[imWfuel,:])
 
-    #TODO add heat exchanger models once HX parameters are stored
-    #HXOffDesign!(HeatExchangers, pare, pari)
+    #Simulate heat exchanger performance if the engine contains any
+    HXOffDesign!(engine.heat_exchangers, pare, options.ifuel)
     
 #-------------------------------------------------------------------------
 

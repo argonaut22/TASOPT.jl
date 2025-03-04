@@ -12,21 +12,13 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
     annotate_text = true, annotate_length = true, annotate_group = true, show_grid = false)
 
     #if aircraft is not sized, cannot plot
-    if !ac.sized[1] 
+    if !ac.is_sized[1] 
         @warn "The aircraft ($(ac.name)) must be sized before being plotted. Skipping `stick_fig`..."
         return nothing
     end
 
-    #convenience vars
-    pari = ac.pari
-    parg = ac.parg
-    @views pare = ac.pare[:,:,1]
-    @views para = ac.para[:,:,1]
-    @views parm = ac.parm[:,:,1]
-    wing = ac.wing
-    htail = ac.htail
-    vtail = ac.vtail
-    fuselage = ac.fuselage
+    # Unpack aircraft components
+    parg, parm, para, pare, options, fuse, fuse_tank, wing, htail, vtail, engine = unpack_ac(ac,1) #imission = 1 
 
     # Wing
         co = wing.layout.root_chord
@@ -102,9 +94,9 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
         xf = zeros(nnose + ntail + 1)
         yf = zeros(nnose + ntail + 1)
 
-        if fuselage.layout.taper_fuse == 0
+        if compare_strings(fuselage.layout.opt_tapers_to, "point")
             dytail = -hwidth 
-        else
+        else # to "edge"
             dytail = -0.2*hwidth
         end
 
@@ -162,12 +154,12 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
         ytTEh = 0.5*bh
 
 
-        if (fuselage.layout.taper_fuse == 0)
+        if compare_strings(fuselage.layout.opt_tapers_to,"point")
             xcLEh = xoLEh
             xcTEh = xoTEh
             ycLEh = yoLEh
             ycTEh = yoTEh
-        else
+        else #to "edge"
             xcLEh = coh*(    - xaxh) + dx + 0.5*(0. - boh)*tanLh
             xcTEh = coh*(1.0 - xaxh) + dx + 0.5*(0. - boh)*tanLh
             ycLEh = 0.0
@@ -225,7 +217,7 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
         ntank = 8
         Rtank = Rfuse - 0.1 # Account for clearance_fuse
         l = max(parg[iglftankin], parg[iglftank])
-        nftanks = pari[iinftanks] #Number of fuel tanks
+        nftanks = fuse_tank.tank_count #Number of fuel tanks
         ARtank = 2.0
 
         if nftanks != 0
@@ -286,7 +278,7 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
             yshell[k] = sqrt(Rfuse^2 * max((1 - ((xshell[k]-xshellcenter)/(Rfuse/AR))^2), 0.0) )
         end
 
-    if pari[iidoubledeck] == 0 #Only show seats in single deck arrangements
+    if !(options.is_doubledecker) #Only show seats in single deck arrangements
         h_seat = fuselage.cabin.seat_height
         pax = parg[igWpay]/parm[imWperpax]
         Rfuse = fuselage.layout.radius
@@ -348,7 +340,7 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
     plot!(plot_obj, xf, -yf, fillrange=yf, label = "", color = :white, edgecolor = :black, linewidth = 2.0, z_order = 5)
 
     # Tank plotting
-    if pari[iifwing] == 0
+    if !(ac.options.has_wing_fuel)
         for m in 1:nftanks
             # Tank outline
             plot!(plot_obj, xt[m,:], yt[m,:], color=:black, lw=1.5, z_order=10)
@@ -359,9 +351,9 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
             
             # Fuel name
             fuelname = ""
-            if pari[iifuel] == 11
+            if options.ifuel == 11
                 fuelname ="\$CH_4\$"
-            elseif pari[iifuel] == 40
+            elseif options.ifuel == 40
                 fuelname ="\$LH_2\$"
             end
             annotate!(plot_obj, (xtanks[m], 0.0, text(fuelname, label_fs - 2.0, :center, :center)))
@@ -429,7 +421,7 @@ function stickfig(ac::aircraft; plot_obj = nothing, label_fs = 16,
     xgrid = repeat(xseats, inner=length(yseats))
     ygrid = repeat(yseats, outer=length(xseats))
 
-    if pari[iidoubledeck] == 0
+    if !(options.is_doubledecker)
         scatter!(plot_obj, xgrid, ygrid,
             color=:gray, alpha=0.1, marker=:rect, 
             ms=2, z_order=:front, label="")
@@ -972,14 +964,13 @@ Function to plot a payload range diagram for an aircraft
     - `filename::String`: filename string for the plot to be stored (Optional).
     - `OEW::Bool`: Whether to have OEW+Payload on the y-axis or just Payload (Optional).
     - `itermax::Int64`: Max Iterations for fly_off_design! loop (Optional).
-    - `initeng::Boolean`: Use design case as initial guess for engine state if true (Optional)
+    - `initializes_engine::Boolean`: Use design case as initial guess for engine state if true (Optional)
     - `Ldebug::Bool`: verbosity flag. false by default, hiding outputs as PR sweeps progress (Optional).
 """
-
 function PayloadRange(ac_og::TASOPT.aircraft; 
     Rpts::Integer = 20, Ppts::Integer = 20, OEW::Bool = false,
     filename::String = "", 
-    itermax::Int64 = 35, initeng::Bool = true,
+    itermax::Int64 = 35, initializes_engine::Bool = true,
     Ldebug::Bool = false)
 
     ac = deepcopy(ac_og)
@@ -1008,7 +999,7 @@ function PayloadRange(ac_og::TASOPT.aircraft;
 
             ac.parm[imWpay,2] = mWpay
             try
-                fly_off_design!(ac, 2; itermax = itermax, initeng = initeng)
+                fly_off_design!(ac, 2; itermax = itermax, initializes_engine = initializes_engine)
                 # fly_off_design success: store maxPay, break loop
                 mWfuel = ac.parm[imWfuel,2]
                 WTO = Wempty + mWpay + mWfuel
@@ -1067,7 +1058,7 @@ function PayloadRange(ac_og::TASOPT.aircraft;
         line=:solid,            # Line style
         color=:green,            # Line color
         xlabel="Range (1000 nmi)", 
-        ylabel="PFEI at max payload (dimensionless)", 
+        ylabel="PFEI at max payload (kJ/kg-km)", 
         title="Payload-Range Diagram: "*string(ac.name), 
         grid=true,              # Enable grid
         dpi = 300,
